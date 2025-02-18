@@ -1523,7 +1523,8 @@ if __name__ == "__main__":
     universitarios_frame = ttk.Frame(window)
     nomes_frame = ttk.Frame(window)
     cbo_frame = ttk.Frame(window)
-
+    cpfs_frame = ttk.Frame(window)
+    
     ttk.Label(window, text="Opção de Busca:").pack(pady=10)
     ttk.Radiobutton(window, text="CEP", variable=search_option, value="CEP", command=on_search_option_changed).pack()
     ttk.Radiobutton(window, text="Cidade, Bairro e Faixa de Renda", variable=search_option, value="CityNeighborhoodIncome", command=on_search_option_changed).pack()
@@ -1534,6 +1535,7 @@ if __name__ == "__main__":
     ttk.Radiobutton(window, text="Nomes", variable=search_option, value="Nomes", command=on_search_option_changed).pack()
     ttk.Radiobutton(window, text="Bairro", variable=search_option, value="Bairro", command=on_search_option_changed).pack()
     ttk.Radiobutton(window, text="Cidade e Profissão", variable=search_option, value="CityCBO", command=on_search_option_changed).pack()
+    ttk.Radiobutton(window, text="CPFs", variable=search_option, value="CPFs", command=on_search_option_changed).pack()
 
     ttk.Label(cep_frame, text="CEP (somente números):").pack(pady=10)
     cep_entry = ttk.Entry(cep_frame)
@@ -1594,6 +1596,14 @@ if __name__ == "__main__":
     nomes_file_button = ttk.Button(nomes_frame, text="Selecionar Arquivo", command=lambda: select_file(nomes_file_path_entry))
     nomes_file_button.pack(side=tk.LEFT, padx=10)
     
+    # Campos para CPFs
+    ttk.Label(cpfs_frame, text="Selecione o arquivo de CPFs:").pack(pady=10)
+    cpfs_file_path_entry = ttk.Entry(cpfs_frame, width=50)
+    cpfs_file_path_entry.pack(side=tk.LEFT)
+    cpfs_file_button = ttk.Button(cpfs_frame, text="Selecionar Arquivo", command=lambda: select_file(cpfs_file_path_entry))
+    cpfs_file_button.pack(side=tk.LEFT, padx=10)
+
+    
     # Campos para CBO
     ttk.Label(cbo_frame, text="Selecione a Profissão:").pack(pady=10)
     cbo_data = load_cbo_data()
@@ -1630,4 +1640,3 @@ if __name__ == "__main__":
     on_search_option_changed()
 
     window.mainloop()
-

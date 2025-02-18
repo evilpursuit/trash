@@ -194,14 +194,18 @@ def fetch_universitarios_by_uf(uf: str) -> List[Dict[str, Any]]:
 # Função de busca por faixa etária
 def fetch_contatos_by_age_and_location(uf: str, city: str, sexo: str, year: int) -> List[int]:
     with db_lock:
-        # Primeira busca: recuperar os contatos associados à cidade no banco Enderecos.db
+        # Primeira busca: recuperar os contatos associados à cidade ou estado no banco Enderecos.db
         connection_enderecos = connect_to_database("Enderecos.db")
         try:
             if not table_exists(connection_enderecos, "srs_enderecos"):
                 raise Exception("A tabela 'srs_enderecos' não existe no banco de dados 'Enderecos.db'.")
-            
+
             cursor_enderecos = connection_enderecos.cursor()
-            cursor_enderecos.execute("SELECT CONTATOS_ID FROM srs_enderecos WHERE UF = ? AND CIDADE = ?", (uf, city))
+            if city:  # Se a cidade foi fornecida
+                cursor_enderecos.execute("SELECT CONTATOS_ID FROM srs_enderecos WHERE UF = ? AND CIDADE = ?", (uf, city))
+            else:  # Se a cidade não foi fornecida
+                cursor_enderecos.execute("SELECT CONTATOS_ID FROM srs_enderecos WHERE UF = ?", (uf,))
+                
             contatos_ids = [row[0] for row in cursor_enderecos.fetchall()]
 
             if not contatos_ids:
@@ -215,7 +219,7 @@ def fetch_contatos_by_age_and_location(uf: str, city: str, sexo: str, year: int)
         try:
             if not table_exists(connection_contatos, "SRS_CONTATOS"):
                 raise Exception("A tabela 'SRS_CONTATOS' não existe no banco de dados 'Contatos.db'.")
-            
+
             cursor_contatos = connection_contatos.cursor()
 
             # Para evitar problemas com grande número de variáveis em uma consulta, fazer em lotes
@@ -240,13 +244,6 @@ def fetch_contatos_by_age_and_location(uf: str, city: str, sexo: str, year: int)
                         try:
                             nasc_year = int(nasc_str[:4])
                             
-                            # Verificar se o lead está falecido
-                            if obito_str:
-                                match_obito = re.search(r'\b(19[0-9]{2}|20[0-2][0-4])\b', obito_str)
-                                if match_obito:
-                                    logging.debug(f"CONTATOS_ID {lead[0]} está falecido: '{obito_str}'")
-                                    continue  # Ignorar leads falecidos com data válida
-
                             # Verificar se a data de nascimento é antes do ano fornecido e o lead está vivo
                             if nasc_year < year:
                                 # Aplicar o filtro de sexo
@@ -261,7 +258,7 @@ def fetch_contatos_by_age_and_location(uf: str, city: str, sexo: str, year: int)
                     else:
                         logging.debug(f"CONTATOS_ID {lead[0]} tem uma data de nascimento vazia ou inválida.")
 
-            logging.debug(f"{len(valid_ids)} leads encontrados para cidade '{city}', UF '{uf}', nascidos antes de {year} com sexo '{sexo}'.")
+            logging.debug(f"{len(valid_ids)} leads encontrados para o estado '{uf}' com sexo '{sexo}' nascidos antes de {year}.")
             return valid_ids
         finally:
             connection_contatos.close()
@@ -306,6 +303,47 @@ def fetch_contatos_by_names(name_file_path: str, uf: str) -> List[int]:
                 valid_ids.extend(row[0] for row in cursor_contatos.fetchall())
 
             logging.debug(f"{len(valid_ids)} leads encontrados para os nomes fornecidos e UF_EMISSAO '{uf}'.")
+            return valid_ids
+
+        except Exception as e:
+            logging.error(f"Erro ao buscar contatos: {e}")
+            return []
+        finally:
+            connection_contatos.close()
+            
+# Função de busca por cpf via arquivo txt
+def fetch_contatos_by_cpfs(cpfs_file_path: str) -> List[int]:
+    valid_ids = []
+    with db_lock:
+        connection_contatos = connect_to_database("Contatos.db")
+        try:
+            # Verifica se a tabela existe no banco de dados 
+            if not table_exists(connection_contatos, "SRS_CONTATOS"):
+                raise Exception("A tabela 'SRS_CONTATOS' não existe.")
+
+            cursor_contatos = connection_contatos.cursor()
+
+            # Ler cpfs do arquivo 
+            try:
+                with open(cpfs_file_path, 'r', encoding='utf-8') as file:
+                    cpfs = file.read().splitlines()
+            except Exception as e:
+                logging.error(f"Erro ao abrir o arquivo de cpf '{cpfs_file_path}': {e}")
+                return []
+
+            # Buscar IDs dos contatos pelos cpfs fornecidos
+            batch_size = 999  # Limite do SQLite 
+            for i in range(0, len(cpfs), batch_size):
+                batch_cpfs = cpfs[i:i + batch_size]
+                placeholders = ', '.join(['?'] * len(batch_cpfs))
+                query = f"""
+                    SELECT CONTATOS_ID FROM SRS_CONTATOS 
+                    WHERE CPF IN ({placeholders})
+                """
+                cursor_contatos.execute(query, (*batch_cpfs,))
+                valid_ids.extend(row[0] for row in cursor_contatos.fetchall())
+
+            logging.debug(f"{len(valid_ids)} leads encontrados para os CPFs fornecidos.")
             return valid_ids
 
         except Exception as e:
@@ -479,7 +517,7 @@ def fetch_contatos_id_by_risk_score_city_neighborhood(city: str, neighborhood: s
                 logging.debug(f"Nenhum lead encontrado para a cidade '{city}' e bairro '{neighborhood}'")
                 return []
 
-            # Agora buscar na tabela Score.db baseando-se nos IDs filtrados e na faixa de risco
+            # Agora buscar na tabela SRS_TB_MODELOS_ANALYTICS_SCORE baseando-se nos IDs filtrados e na faixa de risco
             valid_ids = []
             batch_size = 999  # SQLite geralmente suporta até 999 variáveis por consulta
             for i in range(0, len(filtered_enderecos_ids), batch_size):
@@ -513,7 +551,10 @@ def fetch_contatos_id_by_titulo_eleitor(titulo_eleitor: str) -> List[int]:
             connection.close()
 
 def fetch_contato_data_by_contatos_id(cursor: sqlite3.Cursor, contatos_id: int) -> Dict[int, Dict[str, Any]]:
-    fields_to_search = ["CPF", "NOME", "SEXO", "NASC", "CBO", "RENDA", "FAIXA_RENDA_ID"]
+    fields_to_search = [
+        "CPF", "NOME", "SEXO", "NASC", "NOME_MAE", "NOME_PAI", "ESTCIV", "RG",
+        "CD_SIT_CAD", "DT_SIT_CAD", "DT_INFORMACAO", "CBO", "DT_OB", "RENDA", "FAIXA_RENDA_ID"
+    ]
     data = {}
     try:
         query = f"SELECT CONTATOS_ID, {', '.join(fields_to_search)} FROM SRS_CONTATOS WHERE CONTATOS_ID = ?"
@@ -588,27 +629,6 @@ def fetch_contatos_id_by_city_cbo(uf: str, city: str, profissao: str) -> List[in
         finally:
             enderecos_connection.close()
             contatos_connection.close()
-            
-def fetch_telefones_by_cpf(cpf: str) -> Tuple[str, str]:
-    """
-    Busca os telefones a partir do CPF no banco de dados CSN_TELEFONES.db.
-    :param cpf: CPF do lead.
-    :return: Tupla com (telefone, telefoneSecundario).
-    """
-    with db_lock:
-        connection = connect_to_database("Cadsus.db")
-        try:
-            cursor = connection.cursor()
-            cursor.execute("SELECT telefone, telefoneSecundario FROM datasus WHERE cpf = ?", (cpf,))
-            result = cursor.fetchone()
-            if result:
-                return result  # Retorna os valores encontrados
-            return ("None", "None")  # Retorna valores padrão se não encontrado
-        except Exception as e:
-            logging.error(f"Erro ao buscar telefones para CPF {cpf}: {e}")
-            return ("Erro", "Erro")  # Retorna erro em caso de falha
-        finally:
-            connection.close()
 
 def fetch_missing_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int, field: str, table: str) -> None:
     try:
@@ -629,26 +649,114 @@ def fetch_missing_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, An
         logging.error(f"Erro de codificação ao buscar dados do campo {field} para CONTATOS_ID {contatos_id} no banco de dados {table}: {e}")
         lead_data[contatos_id][field] = ["None"]
 
-def fetch_missing_address_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int, index: int = 1) -> None:
+def fetch_missing_address_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int) -> None:
     try:
-        query = "SELECT LOGR_NOME, LOGR_NUMERO, LOGR_COMPLEMENTO, BAIRRO, CIDADE, CEP FROM srs_enderecos WHERE CONTATOS_ID = ?"
+        query = "SELECT LOGR_TIPO, LOGR_NOME, LOGR_NUMERO, LOGR_COMPLEMENTO, BAIRRO, CIDADE, UF, CEP FROM srs_enderecos WHERE CONTATOS_ID = ? LIMIT 3"
+        cursor.execute(query, (contatos_id,))
+        results = cursor.fetchall()
+        if results:
+            for i, result in enumerate(results):
+                lead_data[contatos_id].update({
+                    f"LOGR_TIPO{i+1}": result[0],
+                    f"LOGR_NOME{i+1}": result[1],
+                    f"LOGR_NUMERO{i+1}": result[2],
+                    f"LOGR_COMPLEMENTO{i+1}": result[3],
+                    f"BAIRRO{i+1}": result[4],
+                    f"CIDADE{i+1}": result[5],
+                    f"UF{i+1}": result[6],
+                    f"CEP{i+1}": result[7]
+                })
+        else:
+            for i in range(1, 4):
+                lead_data[contatos_id].update({
+                    f"LOGR_TIPO{i}": "None",
+                    f"LOGR_NOME{i}": "None",
+                    f"LOGR_NUMERO{i}": "None",
+                    f"LOGR_COMPLEMENTO{i}": "None",
+                    f"BAIRRO{i}": "None",
+                    f"CIDADE{i}": "None",
+                    f"UF{i}": "None",
+                    f"CEP{i}": "None"
+                })
+    except sqlite3.DatabaseError as e:
+        logging.error(f"Erro ao buscar dados de endereço para CONTATOS_ID {contatos_id}: {e}")
+        
+def fetch_missing_email_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int) -> None:
+    try:
+        query = "SELECT EMAIL, PRIORIDADE, EMAIL_SCORE, DT_INCLUSAO FROM SRS_EMAIL WHERE CONTATOS_ID = ? LIMIT 10"
+        cursor.execute(query, (contatos_id,))
+        results = cursor.fetchall()
+        if results:
+            for i, result in enumerate(results):
+                lead_data[contatos_id].update({
+                    f"EMAIL{i+1}": result[0],
+                    f"PRIORIDADE{i+1}": result[1],
+                    f"EMAIL_SCORE{i+1}": result[2],
+                    f"DT_INCLUSAO_EMAIL{i+1}": result[3]
+                })
+        else:
+            for i in range(1, 11):
+                lead_data[contatos_id].update({
+                    f"EMAIL{i}": "None",
+                    f"PRIORIDADE{i}": "None",
+                    f"EMAIL_SCORE{i}": "None",
+                    f"DT_INCLUSAO_EMAIL{i}": "None"
+                })
+    except sqlite3.DatabaseError as e:
+        logging.error(f"Erro ao buscar dados de email para CONTATOS_ID {contatos_id}: {e}")
+        
+def fetch_missing_phone_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int) -> None:
+    try:
+        query = "SELECT DDD, TELEFONE, TIPO_TELEFONE, DT_INCLUSAO FROM SRS_HISTORICO_TELEFONES WHERE CONTATOS_ID = ? LIMIT 5"
+        cursor.execute(query, (contatos_id,))
+        results = cursor.fetchall()
+        if results:
+            for i, result in enumerate(results):
+                lead_data[contatos_id].update({
+                    f"DDD{i+1}": result[0],
+                    f"TELEFONE{i+1}": result[1],
+                    f"TIPO_TELEFONE{i+1}": result[2],
+                    f"DT_INCLUSAO_TELEFONE{i+1}": result[3]
+                })
+        else:
+            for i in range(1, 6):
+                lead_data[contatos_id].update({
+                    f"DDD{i}": "None",
+                    f"TELEFONE{i}": "None",
+                    f"TIPO{i}": "None",
+                    f"TELEFONE{i}": "None",
+                    f"DT_INCLUSAO_TELEFONE{i}": "None"
+                })
+    except sqlite3.DatabaseError as e:
+        logging.error(f"Erro ao buscar dados de telefone para CONTATOS_ID {contatos_id}: {e}")
+        
+def fetch_missing_score_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int) -> None:
+    try:
+        query = "SELECT CSB8, CSB8_FAIXA, CSBA, CSBA_FAIXA FROM SRS_TB_MODELOS_ANALYTICS_SCORE WHERE CONTATOS_ID = ?"
         cursor.execute(query, (contatos_id,))
         result = cursor.fetchone()
-        address_fields = ["LOGR_NOME", "LOGR_NUMERO", "LOGR_COMPLEMENTO", "BAIRRO", "CIDADE", "CEP"]
         if result:
-            for i, field in enumerate(address_fields):
-                lead_data[contatos_id][f"{field}{index}"] = result[i] if result else "None"
+            lead_data[contatos_id].update({
+                "CSB8": result[0],
+                "CSB8_FAIXA": result[1],
+                "CSBA": result[2],
+                "CSBA_FAIXA": result[3]
+            })
         else:
-            for field in address_fields:
-                lead_data[contatos_id][f"{field}{index}"] = "None"
+            lead_data[contatos_id].update({
+                "CSB8": "None",
+                "CSB8_FAIXA": "None",
+                "CSBA": "None",
+                "CSBA_FAIXA": "None"
+            })
     except sqlite3.DatabaseError as e:
-        logging.error(f"Erro ao buscar dados de endereço para CONTATOS_ID {contatos_id} no banco de dados Enderecos.db: {e}")
-        for field in address_fields:
-            lead_data[contatos_id][f"{field}{index}"] = "Erro"
-    except UnicodeDecodeError as e:
-        logging.error(f"Erro de codificação ao buscar dados de endereço para CONTATOS_ID {contatos_id} no banco de dados Enderecos.db: {e}")
-        for field in address_fields:
-            lead_data[contatos_id][f"{field}{index}"] = "None"
+        logging.error(f"Erro ao buscar dados de score para CONTATOS_ID {contatos_id}: {e}")
+        lead_data[contatos_id].update({
+            "CSB8": "Erro",
+            "CSB8_FAIXA": "Erro",
+            "CSBA": "Erro",
+            "CSBA_FAIXA": "Erro"
+        })
 
 def fetch_scores_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]], contatos_id: int) -> None:
     try:
@@ -717,6 +825,84 @@ def fetch_tse_data(cursor: sqlite3.Cursor, lead_data: Dict[int, Dict[str, Any]],
             "ZONA": "None",
             "SECAO": "None"
         })
+        
+def connect_to_adicionais_database() -> sqlite3.Connection:
+    """Conecta ao banco de dados Adicionais.db."""
+    db_path = resource_path("Adicionais.db")
+    try:
+        connection = sqlite3.connect(db_path, timeout=30)
+        logging.debug(f"Conectado ao banco de dados Adicionais.db em {db_path}")
+        return connection
+    except sqlite3.DatabaseError as e:
+        logging.error(f"Erro ao conectar ao banco de dados Adicionais.db: {e}")
+        raise
+
+def fetch_adicionais_data_by_cpf(cpf: str) -> Dict[str, Any]:
+    """Busca dados adicionais a partir do CPF."""
+    with connect_to_adicionais_database() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT TIPO_ENDERECO, LOGRADOURO, NUMERO, COMPLEMENTO, BAIRRO, CIDADE, ESTADO, UF, CEP, "
+                       "TEL_FIXO1, TEL_FIXO2, TEL_FIXO3, TEL_FIXO4, TEL_FIXO5, "
+                       "CELULAR1, CELULAR2, CELULAR3, CELULAR4, CELULAR5, "
+                       "DT_NASCIMENTO, NOME_MAE, SEXO, EMAIL, FLAG_OBITO, DT_OBITO, "
+                       "STATUS_RECEITA_FEDERAL, PCT_CARGO_SOCIETARIO, CBO, "
+                       "QT_VEICULOS, MARCA_VEICULO1, MODELO_VEICULO1, ANO_VEICULO1, "
+                       "MARCA_VEICULO2, MODELO_VEICULO2, ANO_VEICULO2, "
+                       "MARCA_VEICULO3, MODELO_VEICULO3, ANO_VEICULO3, "
+                       "MARCA_VEICULO4, MODELO_VEICULO4, ANO_VEICULO4, "
+                       "MARCA_VEICULO5, MODELO_VEICULO5, ANO_VEICULO5, "
+                       "RENDA_PRESUMIDA, FAIXA_RENDA FROM dados WHERE CPF = ?", (cpf,))
+        result = cursor.fetchone()
+        if result:
+            return {
+                "TIPO_ENDERECO": result[0],
+                "LOGRADOURO": result[1],
+                "NUMERO": result[2],
+                "COMPLEMENTO": result[3],
+                "BAIRRO": result[4],
+                "CIDADE": result[5],
+                "ESTADO": result[6],
+                "UF": result[7],
+                "CEP": result[8],
+                "TEL_FIXO1": result[9],
+                "TEL_FIXO2": result[10],
+                "TEL_FIXO3": result[11],
+                "TEL_FIXO4": result[12],
+                "TEL_FIXO5": result[13],
+                "CELULAR1": result[14],
+                "CELULAR2": result[15],
+                "CELULAR3": result[16],
+                "CELULAR4": result[17],
+                "CELULAR5": result[18],
+                "DT_NASCIMENTO": result[19],
+                "NOME_MAE": result[20],
+                "SEXO": result[21],
+                "EMAIL": result[22],
+                "FLAG_OBITO": result[23],
+                "DT_OBITO": result[24],
+                "STATUS_RECEITA_FEDERAL": result[25],
+                "PCT_CARGO_SOCIETARIO": result[26],
+                "CBO": result[27],
+                "QT_VEICULOS": result[28],
+                "MARCA_VEICULO1": result[29],
+                "MODELO_VEICULO1": result[30],
+                "ANO_VEICULO1": result[31],
+                "MARCA_VEICULO2": result[32],
+                "MODELO_VEICULO2": result[33],
+                "ANO_VEICULO2": result[34],
+                "MARCA_VEICULO3": result[35],
+                "MODELO_VEICULO3": result[36],
+                "ANO_VEICULO3": result[37],
+                "MARCA_VEICULO4": result[38],
+                "MODELO_VEICULO4": result[39],
+                "ANO_VEICULO4": result[40],
+                "MARCA_VEICULO5": result[41],
+                "MODELO_VEICULO5": result[42],
+                "ANO_VEICULO5": result[43],
+                "RENDA_PRESUMIDA": result[44],
+                "FAIXA_RENDA": result[45],
+            }
+        return {}
 
 def format_field(value: Any) -> str:
     if isinstance(value, list) and value:
@@ -726,30 +912,43 @@ def format_field(value: Any) -> str:
     return str(value)
 
 def save_to_txt(data: Dict[int, Dict[str, Any]], output_file: str) -> None:
-    headers = [
-        "CONTATOS_ID", "CPF", "NOME", "SEXO", "NASC", "CBO", "RENDA", "FAIXA_RENDA_ID",
-        "LOGR_NOME1", "LOGR_NUMERO1", "LOGR_COMPLEMENTO1", "BAIRRO1", "CIDADE1", "CEP1",
-        "LOGR_NOME2", "LOGR_NUMERO2", "LOGR_COMPLEMENTO2", "BAIRRO2", "CIDADE2", "CEP2",
-        "CSB8", "CSB8_FAIXA", "CSBA", "CSBA_FAIXA",
-        "TITULO_ELEITOR", "ZONA", "SECAO",
-        "TELEFONE", "TELEFONE_SECUNDARIO"  # Novas colunas adicionadas
-    ]
-    ...
-    for contatos_id, values in data.items():
-        row_data = [
-            format_field(contatos_id),
-            format_field(values.get("CPF", "None")),
-            format_field(values.get("NOME", "None")),
-            format_field(values.get("TELEFONE", "None")),  # Adicionando telefone
-            format_field(values.get("TELEFONE_SECUNDARIO", "None"))  # Adicionando telefone secundário
-        ]
+    output_file = output_file.replace(':', '-')  # Substitui ':' por '-'
     
-    for i in range(1, 7):
-        headers.append(f"EMAIL{i}")
-
-    for i in range(1, 7):
-        headers.extend([f"DDD{i}", f"TELEFONE{i}"])
-
+    headers = [
+        "CONTATOS_ID", "CPF", "NOME", "SEXO", "NASC", "NOME_MAE", "NOME_PAI", "ESTCIV", "RG",
+        "CD_SIT_CAD", "DT_SIT_CAD", "DT_INFORMACAO", "CBO", "DT_OB", "CSB8", "CSB8_FAIXA", 
+        "CSBA", "CSBA_FAIXA", "RENDA", "FAIXA_RENDA_ID",
+        "LOGR_TIPO1", "LOGR_NOME1", "LOGR_NUMERO1", "LOGR_COMPLEMENTO1", "BAIRRO1", "CIDADE1", "UF1", "CEP1",
+        "LOGR_TIPO2", "LOGR_NOME2", "LOGR_NUMERO2", "LOGR_COMPLEMENTO2", "BAIRRO2", "CIDADE2", "UF2", "CEP2",
+        "LOGR_TIPO3", "LOGR_NOME3", "LOGR_NUMERO3", "LOGR_COMPLEMENTO3", "BAIRRO3", "CIDADE3", "UF3", "CEP3",
+        "EMAIL1", "PRIORIDADE1", "EMAIL_SCORE1", "DT_INCLUSAO_EMAIL1",
+        "EMAIL2", "PRIORIDADE2", "EMAIL_SCORE2", "DT_INCLUSAO_EMAIL2",
+        "EMAIL3", "PRIORIDADE3", "EMAIL_SCORE3", "DT_INCLUSAO_EMAIL3",
+        "EMAIL4", "PRIORIDADE4", "EMAIL_SCORE4", "DT_INCLUSAO_EMAIL4",
+        "EMAIL5", "PRIORIDADE5", "EMAIL_SCORE5", "DT_INCLUSAO_EMAIL5",
+        "EMAIL6", "PRIORIDADE6", "EMAIL_SCORE6", "DT_INCLUSAO_EMAIL6",
+        "EMAIL7", "PRIORIDADE7", "EMAIL_SCORE7", "DT_INCLUSAO_EMAIL7",
+        "EMAIL8", "PRIORIDADE8", "EMAIL_SCORE8", "DT_INCLUSAO_EMAIL8",
+        "EMAIL9", "PRIORIDADE9", "EMAIL_SCORE9", "DT_INCLUSAO_EMAIL9",
+        "EMAIL10", "PRIORIDADE10", "EMAIL_SCORE10", "DT_INCLUSAO_EMAIL10",
+        "DDD1", "TELEFONE1", "TIPO_TELEFONE1", "DT_INCLUSAO_TELEFONE1",
+        "DDD2", "TELEFONE2", "TIPO_TELEFONE2", "DT_INCLUSAO_TELEFONE2",
+        "DDD3", "TELEFONE3", "TIPO_TELEFONE3", "DT_INCLUSAO_TELEFONE3",
+        "DDD4", "TELEFONE4", "TIPO_TELEFONE4", "DT_INCLUSAO_TELEFONE4",
+        "DDD5", "TELEFONE5", "TIPO_TELEFONE5", "DT_INCLUSAO_TELEFONE5",
+        "TIPO_ENDERECO", "LOGRADOURO", "NUMERO", "COMPLEMENTO", "BAIRRO", "CIDADE", "ESTADO", "UF", "CEP",
+        "TEL_FIXO1", "TEL_FIXO2", "TEL_FIXO3", "TEL_FIXO4", "TEL_FIXO5",
+        "CELULAR1", "CELULAR2", "CELULAR3", "CELULAR4", "CELULAR5",
+        "DT_NASCIMENTO", "NOME_MAE", "SEXO", "EMAIL", "FLAG_OBITO", "DT_OBITO",
+        "STATUS_RECEITA_FEDERAL", "PCT_CARGO_SOCIETARIO", "CBO", "QT_VEICULOS",
+        "MARCA_VEICULO1", "MODELO_VEICULO1", "ANO_VEICULO1",
+        "MARCA_VEICULO2", "MODELO_VEICULO2", "ANO_VEICULO2",
+        "MARCA_VEICULO3", "MODELO_VEICULO3", "ANO_VEICULO3",
+        "MARCA_VEICULO4", "MODELO_VEICULO4", "ANO_VEICULO4",
+        "MARCA_VEICULO5", "MODELO_VEICULO5", "ANO_VEICULO5",
+        "RENDA_PRESUMIDA", "FAIXA_RENDA"
+    ]
+    
     with open(output_file, 'w', encoding="utf-8") as f:
         f.write(';'.join(headers) + '\n')
 
@@ -760,50 +959,156 @@ def save_to_txt(data: Dict[int, Dict[str, Any]], output_file: str) -> None:
                 format_field(values.get("NOME", "None")),
                 format_field(values.get("SEXO", "None")),
                 format_field(values.get("NASC", "None")),
+                format_field(values.get("NOME_MAE", "None")),
+                format_field(values.get("NOME_PAI", "None")),
+                format_field(values.get("ESTCIV", "None")),
+                format_field(values.get("RG", "None")),
+                format_field(values.get("CD_SIT_CAD", "None")),
+                format_field(values.get("DT_SIT_CAD", "None")),
+                format_field(values.get("DT_INFORMACAO", "None")),
                 format_field(values.get("CBO", "None")),
+                format_field(values.get("DT_OB", "None")),
+                format_field(values.get("CSB8", "None")),
+                format_field(values.get("CSB8_FAIXA", "None")),
+                format_field(values.get("CSBA", "None")),
+                format_field(values.get("CSBA_FAIXA", "None")),
                 format_field(values.get("RENDA", "None")),
                 format_field(values.get("FAIXA_RENDA_ID", "None")),
+                format_field(values.get("LOGR_TIPO1", "None")),
                 format_field(values.get("LOGR_NOME1", "None")),
                 format_field(values.get("LOGR_NUMERO1", "None")),
                 format_field(values.get("LOGR_COMPLEMENTO1", "None")),
                 format_field(values.get("BAIRRO1", "None")),
                 format_field(values.get("CIDADE1", "None")),
+                format_field(values.get("UF1", "None")),
                 format_field(values.get("CEP1", "None")),
+                format_field(values.get("LOGR_TIPO2", "None")),
                 format_field(values.get("LOGR_NOME2", "None")),
                 format_field(values.get("LOGR_NUMERO2", "None")),
                 format_field(values.get("LOGR_COMPLEMENTO2", "None")),
                 format_field(values.get("BAIRRO2", "None")),
                 format_field(values.get("CIDADE2", "None")),
+                format_field(values.get("UF2", "None")),
                 format_field(values.get("CEP2", "None")),
-                format_field(values.get("CSB8", "None")),
-                format_field(values.get("CSB8_FAIXA", "None")),
-                format_field(values.get("CSBA", "None")),
-                format_field(values.get("CSBA_FAIXA", "None")),
-                format_field(values.get("TITULO_ELEITOR", "None")),
-                format_field(values.get("ZONA", "None")),
-                format_field(values.get("SECAO", "None"))
+                format_field(values.get("LOGR_TIPO3", "None")),
+                format_field(values.get("LOGR_NOME3", "None")),
+                format_field(values.get("LOGR_NUMERO3", "None")),
+                format_field(values.get("LOGR_COMPLEMENTO3", "None")),
+                format_field(values.get("BAIRRO3", "None")),
+                format_field(values.get("CIDADE3", "None")),
+                format_field(values.get("UF3", "None")),
+                format_field(values.get("CEP3", "None")),
+                format_field(values.get("EMAIL1", "None")),
+                format_field(values.get("PRIORIDADE1", "None")),
+                format_field(values.get("EMAIL_SCORE1", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL1", "None")),
+                format_field(values.get("EMAIL2", "None")),
+                format_field(values.get("PRIORIDADE2", "None")),
+                format_field(values.get("EMAIL_SCORE2", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL2", "None")),
+                format_field(values.get("EMAIL3", "None")),
+                format_field(values.get("PRIORIDADE3", "None")),
+                format_field(values.get("EMAIL_SCORE3", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL3", "None")),
+                format_field(values.get("EMAIL4", "None")),
+                format_field(values.get("PRIORIDADE4", "None")),
+                format_field(values.get("EMAIL_SCORE4", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL4", "None")),
+                format_field(values.get("EMAIL5", "None")),
+                format_field(values.get("PRIORIDADE5", "None")),
+                format_field(values.get("EMAIL_SCORE5", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL5", "None")),
+                format_field(values.get("EMAIL6", "None")),
+                format_field(values.get("PRIORIDADE6", "None")),
+                format_field(values.get("EMAIL_SCORE6", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL6", "None")),
+                format_field(values.get("EMAIL7", "None")),
+                format_field(values.get("PRIORIDADE7", "None")),
+                format_field(values.get("EMAIL_SCORE7", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL7", "None")),
+                format_field(values.get("EMAIL8", "None")),
+                format_field(values.get("PRIORIDADE8", "None")),
+                format_field(values.get("EMAIL_SCORE8", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL8", "None")),
+                format_field(values.get("EMAIL9", "None")),
+                format_field(values.get("PRIORIDADE9", "None")),
+                format_field(values.get("EMAIL_SCORE9", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL9", "None")),
+                format_field(values.get("EMAIL10", "None")),
+                format_field(values.get("PRIORIDADE10", "None")),
+                format_field(values.get("EMAIL_SCORE10", "None")),
+                format_field(values.get("DT_INCLUSAO_EMAIL10", "None")),
+                format_field(values.get("DDD1", "None")),
+                format_field(values.get("TELEFONE1", "None")),
+                format_field(values.get("TIPO_TELEFONE1", "None")),
+                format_field(values.get("DT_INCLUSAO_TELEFONE1", "None")),
+                format_field(values.get("DDD2", "None")),
+                format_field(values.get("TELEFONE2", "None")),
+                format_field(values.get("TIPO_TELEFONE2", "None")),
+                format_field(values.get("DT_INCLUSAO_TELEFONE2", "None")),
+                format_field(values.get("DDD3", "None")),
+                format_field(values.get("TELEFONE3", "None")),
+                format_field(values.get("TIPO_TELEFONE3", "None")),
+                format_field(values.get("DT_INCLUSAO_TELEFONE3", "None")),
+                format_field(values.get("DDD4", "None")),
+                format_field(values.get("TELEFONE4", "None")),
+                format_field(values.get("TIPO_TELEFONE4", "None")),
+                format_field(values.get("DT_INCLUSAO_TELEFONE4", "None")),
+                format_field(values.get("DDD5", "None")),
+                format_field(values.get("TELEFONE5", "None")),
+                format_field(values.get("TIPO_TELEFONE5", "None")),
+                format_field(values.get("DT_INCLUSAO_TELEFONE5", "None")),
+                # Adicionando dados do Adicionais.db
+                format_field(values.get("TIPO_ENDERECO", "None")),
+                format_field(values.get("LOGRADOURO", "None")),
+                format_field(values.get("NUMERO", "None")),
+                format_field(values.get("COMPLEMENTO", "None")),
+                format_field(values.get("BAIRRO", "None")),
+                format_field(values.get("CIDADE", "None")),
+                format_field(values.get("ESTADO", "None")),
+                format_field(values.get("UF", "None")),
+                format_field(values.get("CEP", "None")),
+                format_field(values.get("TEL_FIXO1", "None")),
+                format_field(values.get("TEL_FIXO2", "None")),
+                format_field(values.get("TEL_FIXO3", "None")),
+                format_field(values.get("TEL_FIXO4", "None")),
+                format_field(values.get("TEL_FIXO5", "None")),
+                format_field(values.get("CELULAR1", "None")),
+                format_field(values.get("CELULAR2", "None")),
+                format_field(values.get("CELULAR3", "None")),
+                format_field(values.get("CELULAR4", "None")),
+                format_field(values.get("CELULAR5", "None")),
+                format_field(values.get("DT_NASCIMENTO", "None")),
+                format_field(values.get("NOME_MAE", "None")),
+                format_field(values.get("SEXO", "None")),
+                format_field(values.get("EMAIL", "None")),
+                format_field(values.get("FLAG_OBITO", "None")),
+                format_field(values.get("DT_OBITO", "None")),
+                format_field(values.get("STATUS_RECEITA_FEDERAL", "None")),
+                format_field(values.get("PCT_CARGO_SOCIETARIO", "None")),
+                format_field(values.get("CBO", "None")),
+                format_field(values.get("QT_VEICULOS", "None")),
+                format_field(values.get("MARCA_VEICULO1", "None")),
+                format_field(values.get("MODELO_VEICULO1", "None")),
+                format_field(values.get("ANO_VEICULO1", "None")),
+                format_field(values.get("MARCA_VEICULO2", "None")),
+                format_field(values.get("MODELO_VEICULO2", "None")),
+                format_field(values.get("ANO_VEICULO2", "None")),
+                format_field(values.get("MARCA_VEICULO3", "None")),
+                format_field(values.get("MODELO_VEICULO3", "None")),
+                format_field(values.get("ANO_VEICULO3", "None")),
+                format_field(values.get("MARCA_VEICULO4", "None")),
+                format_field(values.get("MODELO_VEICULO4", "None")),
+                format_field(values.get("ANO_VEICULO4", "None")),
+                format_field(values.get("MARCA_VEICULO5", "None")),
+                format_field(values.get("MODELO_VEICULO5", "None")),
+                format_field(values.get("ANO_VEICULO5", "None")),
+                format_field(values.get("RENDA_PRESUMIDA", "None")),
+                format_field(values.get("FAIXA_RENDA", "None")),
             ]
             
-            emails = values.get("EMAIL", ["None"] * 6)
-            for email in emails:
-                row_data.append(format_field(email))
-            for _ in range(6 - len(emails)):
-                row_data.append("None")
-
-            ddds = values.get("DDD", ["None"] * 6)
-            telefones = values.get("TELEFONE", ["None"] * 6)
-            for i in range(6):
-                if i < len(ddds):
-                    row_data.append(format_field(ddds[i]))
-                else:
-                    row_data.append("None")
-                if i < len(telefones):
-                    row_data.append(format_field(telefones[i]))
-                else:
-                    row_data.append("None")
-
             f.write(';'.join(row_data) + '\n')
-    
+
     logging.debug(f"Relatório salvo em '{output_file}' com {len(data)} registros.")
 
 def update_city_combobox(event: tk.Event) -> None:
@@ -833,8 +1138,7 @@ def process_contato_id(contatos_id: int) -> Dict[int, Dict[str, Any]]:
         try:
             with connect_to_database("Telefones.db") as conn_telefones:
                 cursor_telefones = conn_telefones.cursor()
-                fetch_missing_data(cursor_telefones, lead_data, contatos_id, "DDD", "SRS_HISTORICO_TELEFONES")
-                fetch_missing_data(cursor_telefones, lead_data, contatos_id, "TELEFONE", "SRS_HISTORICO_TELEFONES")
+                fetch_missing_phone_data(cursor_telefones, lead_data, contatos_id)
         except Exception as e:
             logging.error(f"Erro ao processar SRS_HISTORICO_TELEFONES para ID {contatos_id}: {e}")
             lead_data[contatos_id]["DDD"] = ["None"]
@@ -844,7 +1148,7 @@ def process_contato_id(contatos_id: int) -> Dict[int, Dict[str, Any]]:
         try:
             with connect_to_database("Email.db") as conn_email:
                 cursor_email = conn_email.cursor()
-                fetch_missing_data(cursor_email, lead_data, contatos_id, "EMAIL", "SRS_EMAIL")
+                fetch_missing_email_data(cursor_email, lead_data, contatos_id)
         except Exception as e:
             logging.error(f"Erro ao processar SRS_EMAIL para ID {contatos_id}: {e}")
             lead_data[contatos_id]["EMAIL"] = ["None"]
@@ -853,29 +1157,27 @@ def process_contato_id(contatos_id: int) -> Dict[int, Dict[str, Any]]:
         try:
             with connect_to_database("Enderecos.db") as conn_enderecos:
                 cursor_enderecos = conn_enderecos.cursor()
-                fetch_missing_address_data(cursor_enderecos, lead_data, contatos_id, 1)
-                fetch_missing_address_data(cursor_enderecos, lead_data, contatos_id, 2)
+                fetch_missing_address_data(cursor_enderecos, lead_data, contatos_id)
         except Exception as e:
             logging.error(f"Erro ao processar Enderecos para ID {contatos_id}: {e}")
-            # Definir valores padrão para campos de endereço
 
-        # Score.db
+        # SRS_TB_MODELOS_ANALYTICS_SCORE
         try:
             with connect_to_database("Score.db") as conn_scores:
                 cursor_scores = conn_scores.cursor()
-                fetch_scores_data(cursor_scores, lead_data, contatos_id)
+                fetch_missing_score_data(cursor_scores, lead_data, contatos_id)
         except Exception as e:
-            logging.error(f"Erro ao processar Score.db para ID {contatos_id}: {e}")
-            # Definir valores padrão para scores
+            logging.error(f"Erro ao processar SRS_TB_MODELOS_ANALYTICS_SCORE para ID {contatos_id}: {e}")
+            lead_data[contatos_id]["CSB8"] = "None"
+            lead_data[contatos_id]["CSB8_FAIXA"] = "None"
+            lead_data[contatos_id]["CSBA"] = "None"
+            lead_data[contatos_id]["CSBA_FAIXA"] = "None"
 
-        # SRS_TB_TSE
-        try:
-            with connect_to_database("SRS_TB_TSE.db") as conn_tse:
-                cursor_tse = conn_tse.cursor()
-                fetch_tse_data(cursor_tse, lead_data, contatos_id)
-        except Exception as e:
-            logging.error(f"Erro ao processar SRS_TB_TSE para ID {contatos_id}: {e}")
-            # Definir valores padrão para dados do TSE
+        # Buscar dados adicionais usando CPF
+        cpf = lead_data[contatos_id].get("CPF", "None")
+        if cpf != "None":
+            adicionais_data = fetch_adicionais_data_by_cpf(cpf)
+            lead_data[contatos_id].update(adicionais_data)
 
         logging.debug(f"Processamento concluído para CONTATOS_ID: {contatos_id}")
         return lead_data
@@ -918,6 +1220,7 @@ def search_leads() -> None:
     titulo_eleitor_file_path = titulo_eleitor_file_path_entry.get().strip()
     nome_file_path = nomes_file_path_entry.get().strip()
     profissao = cbo_combobox.get().strip()
+    cpfs_file_path = cpfs_file_path_entry.get().strip()
     
     lead_data = {}
     contatos_ids = []  # Inicializando a variável 'contatos_ids'
@@ -979,10 +1282,15 @@ def search_leads() -> None:
         elif search_option.get() == "FaixaEtaria":
             year = int(faixa_etaria_entry.get())
             sexo = sexo_combobox.get()
-            contatos_ids = fetch_contatos_by_age_and_location(state, city, sexo, year)
-            messagebox.showinfo("Resultado", f"{len(contatos_ids)} LEADS encontrados para a cidade '{city}', nascidos antes de {year}.")
-            logging.debug(f"Iniciando processamento de {len(contatos_ids)} leads para a cidade '{city}', nascidos antes de {year}")
-
+            
+            if city:  # Se a cidade foi fornecida
+                contatos_ids = fetch_contatos_by_age_and_location(state, city, sexo, year)
+                messagebox.showinfo("Resultado", f"{len(contatos_ids)} LEADS encontrados para a cidade '{city}', nascidos antes de {year}.")
+                logging.debug(f"Iniciando processamento de {len(contatos_ids)} leads para a cidade '{city}', nascidos antes de {year}")
+            else:  # Se a cidade não foi fornecida
+                contatos_ids = fetch_contatos_by_age_and_location(state, None, sexo, year)  # Passa None para a cidade
+                messagebox.showinfo("Resultado", f"{len(contatos_ids)} LEADS encontrados para o estado '{state}', nascidos antes de {year}.")
+                
         # Processamento para busca por Título de Eleitor
         elif search_option.get() == "TituloEleitor":
             if titulo_eleitor_file_path:
@@ -1012,6 +1320,18 @@ def search_leads() -> None:
                 return
             messagebox.showinfo("Resultado", f"{len(contatos_ids)} LEADS encontrados para os nomes fornecidos.")
             logging.debug(f"Iniciando processamento de {len(contatos_ids)} leads para os nomes fornecidos")
+            
+        # Processamento para busca por CPFs
+        elif search_option.get() == "CPFs":
+            if not cpfs_file_path:  # Corrige a verificação para cpfs_file_path
+                messagebox.showerror("Erro", "O arquivo de CPFs é obrigatório para a busca por CPFs.")
+                return
+            contatos_ids = fetch_contatos_by_cpfs(cpfs_file_path)  # Corrige para usar apenas o argumento esperado
+            if not contatos_ids:
+                messagebox.showinfo("Resultado", "Nenhum lead encontrado para os CPFs fornecidos.")
+                return
+            messagebox.showinfo("Resultado", f"{len(contatos_ids)} LEADS encontrados para os CPFs fornecidos.")
+            logging.debug(f"Iniciando processamento de {len(contatos_ids)} leads para os CPFs fornecidos")
 
         # Processamento para busca por Universitários
         elif search_option.get() == "Universitarios":
@@ -1127,6 +1447,7 @@ def on_search_option_changed() -> None:
     universitarios_frame.pack_forget()
     nomes_frame.pack_forget()
     cbo_frame.pack_forget()
+    cpfs_frame.pack_forget()
 
     # Mostrar o frame correspondente com base na opção de busca selecionada
     if search_option.get() == "CEP":
@@ -1147,6 +1468,9 @@ def on_search_option_changed() -> None:
     elif search_option.get() == "Nomes":
         state_frame.pack(pady=10)  # Adicionado para filtrar por UF/Estado
         nomes_frame.pack(pady=10)
+    elif search_option.get() == "CPFs":
+        state_frame.pack(pady=10)  # Adicionado para filtrar por UF/Estado
+        cpfs_frame.pack(pady=10)
     elif search_option.get() == "Bairro":
         state_frame.pack(pady=10)
         city_frame.pack(pady=10)

@@ -1506,8 +1506,8 @@ if __name__ == "__main__":
     options_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="Opções", menu=options_menu)
     options_menu.add_command(label="Nova Consulta", command=lambda: messagebox.showinfo("Nova Consulta", "Iniciar uma nova consulta."))
-    options_menu.add_command(label="Contrato", command=lambda: messagebox.showinfo("Contrato", "Uso exclusivo de <Nome> - Doc nº  <NumDoc>. Verifique os temos em Acesse: <LinkContrato>"))
-    options_menu.add_command(label="Verificar Registro", command=lambda: messagebox.showinfo("Verificar Registro", "Uso exclusivo de <Nome> - Doc nº  <NumDoc>. Acesse <LinkContrato> e verifique as atualizações disponíveis e condições especiais para aquisição"))
+    options_menu.add_command(label="Contrato", command=lambda: messagebox.showinfo("Contrato", "Acesse: https://shre.ink/Do7o"))
+    options_menu.add_command(label="Verificar Registro", command=lambda: messagebox.showinfo("Verificar Registro", "Registrado para exclusivo de <Nome>, Doc. nº <NumDoc> - <LinkContrato>"))
 
     search_option = tk.StringVar(value="CEP")
     cep_frame = ttk.Frame(window)
@@ -1638,3 +1638,4 @@ if __name__ == "__main__":
     on_search_option_changed()
 
     window.mainloop()
+

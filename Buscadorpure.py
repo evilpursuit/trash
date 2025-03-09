@@ -1495,7 +1495,7 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()  # Garante suporte a congelamento para multiprocessamento
 
     window = tk.Tk()
-    window.title("<AssemblyName>")
+    window.title("Licença expirada - Entre em contato com 41995999175 via WhatsApp para uma cópia original <AssemblyName>")
     window.geometry("800x800")
 
     # Criação do menu

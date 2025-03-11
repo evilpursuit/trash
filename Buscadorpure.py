@@ -1495,7 +1495,7 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()  # Garante suporte a congelamento para multiprocessamento
 
     window = tk.Tk()
-    window.title("Licença expirada - Entre em contato com 41995999175 via WhatsApp para uma cópia original <AssemblyName>")
+    window.title("<AssemblyName>") #Licença expirada - Entre em contato com 41995999175 via WhatsApp para uma cópia original 
     window.geometry("800x800")
 
     # Criação do menu
@@ -1523,7 +1523,7 @@ if __name__ == "__main__":
     cbo_frame = ttk.Frame(window)
     cpfs_frame = ttk.Frame(window)
     
-    ttk.Label(window, text="ENTRE EM CONTATO COM 41-995999175 PARA OBTER UMA CÓPIA ORIGINAL").pack(pady=10)
+    ttk.Label(window, text="Opções de Busca").pack(pady=10) #ENTRE EM CONTATO COM 41-995999175 PARA OBTER UMA CÓPIA ORIGINAL
     ttk.Radiobutton(window, text="CEP", variable=search_option, value="CEP", command=on_search_option_changed).pack()
     ttk.Radiobutton(window, text="Cidade, Bairro e Faixa de Renda", variable=search_option, value="CityNeighborhoodIncome", command=on_search_option_changed).pack()
     ttk.Radiobutton(window, text="Faixa de Risco, Cidade e Bairro", variable=search_option, value="RiskScoreCityNeighborhood", command=on_search_option_changed).pack()

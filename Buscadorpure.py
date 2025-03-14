@@ -1,4 +1,4 @@
-#from datetime import datetime
+from datetime import datetime
 
 # Data limite para o script
 VALID_UNTIL = datetime(2025, 12, 10)  # Exemplo de validade
@@ -9,16 +9,16 @@ if datetime.now() > VALID_UNTIL:
     exit()
 import os
 from typing import List, Dict, Tuple, Any
-#import sqlite3
+import sqlite3
 import re
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
 import logging
 import json
-#from datetime import datetime
+from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
-#import multiprocessing
+import multiprocessing
 
 # Configuração de logging
 logging.basicConfig(filename='app_log.txt', level=logging.DEBUG, format='%(asctime)s %(levelname)s:%(message)s')

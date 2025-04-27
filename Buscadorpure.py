@@ -7,7 +7,7 @@ VALID_UNTIL = datetime(2025, 12, 10)  # Exemplo de validade
 if datetime.now() > VALID_UNTIL:
     print("Sua licença expirou e seu programa não pode mais ser executado. Entre em contato com (41) 9 9599-9175 para reativar")
     exit()
-import os
+#import os
 from typing import List, Dict, Tuple, Any
 import sqlite3
 import re

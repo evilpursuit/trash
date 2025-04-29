@@ -1506,7 +1506,7 @@ if __name__ == "__main__":
     options_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="Opções", menu=options_menu)
     options_menu.add_command(label="Nova Consulta", command=lambda: messagebox.showinfo("Nova Consulta", "Iniciar uma nova consulta."))
-    options_menu.add_command(label="Contrato", command=lambda: messagebox.showinfo("Contrato", "Acesse: https://shre.ink/Do7o"))
+    options_menu.add_command(label="Contrato", command=lambda: messagebox.showinfo("Contrato", "Acesse: metatecnologia@gmail.com"))
     options_menu.add_command(label="Verificar Registro", command=lambda: messagebox.showinfo("Verificar Registro", "Registrado para exclusivo de <Nome>, Doc. nº <NumDoc> - <LinkContrato>"))
 
     search_option = tk.StringVar(value="CEP")
